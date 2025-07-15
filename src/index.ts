@@ -38,7 +38,6 @@ Bun.serve({
     },
   },
   error(error) {
-    console.error(error);
     return new Response(`Internal Error: ${error.message}`, {
       status: 500,
       headers: {
