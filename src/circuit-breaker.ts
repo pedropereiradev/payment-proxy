@@ -8,8 +8,8 @@ interface CircuitState {
 
 type Processor = "default" | "fallback";
 
-const FAILURE_THRESHOLD = 2;
-const RECOVERY_TIMEOUT = 4000;
+const FAILURE_THRESHOLD = 1;
+const RECOVERY_TIMEOUT = 6000;
 
 async function getCircuitState(processor: Processor): Promise<CircuitState> {
   const key = `circuit:${processor}`;
