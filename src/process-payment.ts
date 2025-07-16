@@ -1,6 +1,6 @@
 import { fetch, sql } from "bun";
-import { isHealthy } from "./health-check";
 import { isCircuitOpen, recordFailure, recordSuccess } from "./circuit-breaker";
+import { isHealthy } from "./health-check";
 
 const defaultProcessorUrl = Bun.env.DEFAULT_PROCESSOR_URL;
 const fallbackProcessorUrl = Bun.env.FALLBACK_PROCESSOR_URL;
@@ -12,9 +12,10 @@ export async function processPayment(payment: {
   try {
     const requestedAt = new Date().toISOString();
 
-    const defaultHealthy = await isHealthy("default");
-
-    const defaultCircuitOpen = await isCircuitOpen("default");
+    const [defaultHealthy, defaultCircuitOpen] = await Promise.all([
+      isHealthy("default"),
+      isCircuitOpen("default"),
+    ]);
 
     const processorToTry =
       defaultHealthy && !defaultCircuitOpen ? "default" : "fallback";
@@ -31,16 +32,18 @@ export async function processPayment(payment: {
           amount: payment.amount,
           requestedAt,
         }),
-        signal: AbortSignal.timeout(500),
+        signal: AbortSignal.timeout(200),
       },
     );
 
     if (response.ok) {
-      await recordSuccess(processorToTry);
-      await sql`
+      await Promise.all([
+        recordSuccess(processorToTry),
+        sql`
           INSERT INTO payments (correlation_id, amount, requested_at, processor)
           VALUES (${payment.correlationId}, ${payment.amount}, ${requestedAt}, ${processorToTry})
-        `;
+        `,
+      ]);
 
       return;
     }
@@ -62,28 +65,33 @@ export async function processPayment(payment: {
           amount: payment.amount,
           requestedAt,
         }),
-        signal: AbortSignal.timeout(500),
+        signal: AbortSignal.timeout(200),
       },
     );
 
     if (fallbackResponse.ok) {
-      await recordSuccess(fallbackProcessor);
-      await sql`
+      await Promise.all([
+        recordSuccess(fallbackProcessor),
+        sql`
           INSERT INTO payments (correlation_id, amount, requested_at, processor)
           VALUES (${payment.correlationId}, ${payment.amount}, ${requestedAt}, ${fallbackProcessor})
-        `;
+        `,
+      ]);
 
       return;
     } else {
       await recordFailure(fallbackProcessor);
       throw new Error("Both processors failed");
     }
-  } catch (error) {
+  } catch (_error) {
     throw new Error("Failed to process payment");
   }
 }
 
-export async function getPaymentsSummary(from?: string, to?: string) {
+export async function getPaymentsSummary(
+  from?: string | null,
+  to?: string | null,
+) {
   try {
     let query = sql`SELECT processor, COUNT(*) as "totalRequests", SUM(amount) as "totalAmount" FROM payments WHERE 1=1`;
 
