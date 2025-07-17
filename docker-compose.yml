@@ -15,8 +15,6 @@ x-api-common: &api-common
     DEFAULT_PROCESSOR_URL: http://payment-processor-default:8080
     FALLBACK_PROCESSOR_URL: http://payment-processor-fallback:8080
   depends_on:
-    # postgres:
-    #   condition: service_healthy
     redis:
       condition: service_healthy
   networks:
