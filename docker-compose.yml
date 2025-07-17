@@ -15,8 +15,8 @@ x-api-common: &api-common
     DEFAULT_PROCESSOR_URL: http://payment-processor-default:8080
     FALLBACK_PROCESSOR_URL: http://payment-processor-fallback:8080
   depends_on:
-    postgres:
-      condition: service_healthy
+    # postgres:
+    #   condition: service_healthy
     redis:
       condition: service_healthy
   networks:
@@ -26,7 +26,7 @@ x-api-common: &api-common
     resources:
       limits:
         cpus: "0.55"
-        memory: "100MB"
+        memory: "110MB"
   restart: unless-stopped
   healthcheck:
     test:
@@ -56,8 +56,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.15"
-          memory: "50MB"
+          cpus: "0.10"
+          memory: "40MB"
     restart: unless-stopped
 
   api1:
@@ -87,33 +87,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.15"
-          memory: "50MB"
-    networks:
-      - payment-proxy
-
-  postgres:
-    image: postgres:17
-    environment:
-      POSTGRES_DB: payment_proxy
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-    volumes:
-      - ./docker/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d payment_proxy"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          cpus: "0.35"
-          memory: "50MB"
+          cpus: "0.30"
+          memory: "90MB"
     networks:
       - payment-proxy
 
