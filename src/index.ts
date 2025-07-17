@@ -1,4 +1,5 @@
 import { getPaymentsSummary, processPayment } from "./process-payment";
+import { processPaymentQueue } from "./worker";
 
 Bun.serve({
   routes: {
@@ -46,3 +47,5 @@ Bun.serve({
     });
   },
 });
+
+processPaymentQueue();
