@@ -44,3 +44,14 @@ export async function getPaymentsSummary(
     throw new Error("Failed to get payment summary");
   }
 }
+
+export async function purgePayments() {
+  const keys = await redis.send("KEYS", ["payment:*"]);
+  if (keys.length > 0) {
+    await redis.send("DEL", keys);
+  }
+
+  await redis.send("DEL", ["payment_queue"]);
+
+  return;
+}

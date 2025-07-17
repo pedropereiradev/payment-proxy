@@ -1,5 +1,11 @@
-import { getPaymentsSummary, processPayment } from "./process-payment";
+import {
+  getPaymentsSummary,
+  processPayment,
+  purgePayments,
+} from "./process-payment";
 import { processPaymentQueue } from "./worker";
+
+processPaymentQueue();
 
 Bun.serve({
   routes: {
@@ -34,6 +40,13 @@ Bun.serve({
         return Response.json(summary);
       },
     },
+    "/purge-payments": {
+      POST: async () => {
+        await purgePayments();
+
+        return Response.json({ message: "All payments purged." });
+      },
+    },
     "/health": {
       GET: () => Response.json({ ping: "pong" }),
     },
@@ -47,5 +60,3 @@ Bun.serve({
     });
   },
 });
-
-processPaymentQueue();
