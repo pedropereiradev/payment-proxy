@@ -1,79 +1,94 @@
 import { redis } from "bun";
 
-const defaultProcessorUrl = Bun.env.DEFAULT_PROCESSOR_URL;
-const fallbackProcessorUrl = Bun.env.FALLBACK_PROCESSOR_URL;
+const defaultProcessorUrl = Bun.env.DEFAULT_PROCESSOR_URL as string;
+const fallbackProcessorUrl = Bun.env.FALLBACK_PROCESSOR_URL as string;
 
 const EXPIRE_TIME = 5;
 
-type Processor = "default" | "fallback";
 interface HealthCheckResponse {
   failing: boolean;
   minResponseTime: number;
 }
 
-async function cacheHealthCheck(
-  processor: Processor,
-  data: HealthCheckResponse,
-) {
-  await redis.set(`health:${processor}`, JSON.stringify(data));
-  await redis.expire(`health:${processor}`, EXPIRE_TIME);
+interface FetchHealthResponse {
+  defaultProcessor: HealthCheckResponse;
+  fallbackProcessor: HealthCheckResponse;
 }
 
-async function getCachedHealth(
-  processor: Processor,
-): Promise<HealthCheckResponse | null> {
-  const healthData = await redis.get(`health:${processor}`);
+async function cacheHealthCheck(data: FetchHealthResponse) {
+  await redis.set(`health`, JSON.stringify(data));
+  await redis.expire(`health`, EXPIRE_TIME);
+}
+
+async function getCachedHealth(): Promise<FetchHealthResponse | null> {
+  const healthData = await redis.get(`health`);
 
   if (!healthData) {
     return null;
   }
 
-  return JSON.parse(healthData) as HealthCheckResponse;
+  return JSON.parse(healthData) as FetchHealthResponse;
 }
 
-async function fetchHealthFromProcessor(
-  processor: Processor,
-): Promise<HealthCheckResponse> {
+async function fetchHealthFromProcessors(): Promise<FetchHealthResponse> {
   try {
-    const response = await fetch(
-      `${processor === "default" ? defaultProcessorUrl : fallbackProcessorUrl}/payments/service-health`,
-      { signal: AbortSignal.timeout(500) },
-    );
+    const [defaultResponse, fallbackResponse] = await Promise.all([
+      fetch(`${defaultProcessorUrl}/payments/service-health`),
+      fetch(`${fallbackProcessorUrl}/payments/service-health`),
+    ]);
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch health from ${processor} processor`);
+    if (!defaultResponse.ok && !fallbackResponse.ok) {
+      throw new Error(`Failed to fetch health from processors`);
     }
 
-    if (response.status === 429) {
-      throw new Error("Rate limit exceeded");
-    }
+    const defaultHealth = await defaultResponse.json();
+    const fallbackHealth = await fallbackResponse.json();
 
-    const data = await response.json();
-
-    return data as HealthCheckResponse;
+    return {
+      defaultProcessor: defaultHealth,
+      fallbackProcessor: fallbackHealth,
+    } as FetchHealthResponse;
   } catch (_error) {
-    return { failing: true, minResponseTime: 500 };
+    return {
+      defaultProcessor: { failing: true, minResponseTime: 500 },
+      fallbackProcessor: { failing: true, minResponseTime: 500 },
+    };
   }
 }
 
-export async function getHealth(
-  processor: Processor,
-): Promise<HealthCheckResponse> {
-  const cachedData = await getCachedHealth(processor);
+export async function getHealth(): Promise<{ name: string; url: string }> {
+  const cachedData = await getCachedHealth();
 
   if (cachedData) {
-    return cachedData;
+    return chooseProcessor(cachedData);
   }
 
-  const health = await fetchHealthFromProcessor(processor);
+  const health = await fetchHealthFromProcessors();
 
-  await cacheHealthCheck(processor, health);
+  await cacheHealthCheck(health);
 
-  return health;
+  return chooseProcessor(health);
 }
 
-export async function isHealthy(processor: Processor): Promise<boolean> {
-  const health = await getHealth(processor);
+async function chooseProcessor({
+  defaultProcessor,
+  fallbackProcessor,
+}: FetchHealthResponse) {
+  if (defaultProcessor.failing && fallbackProcessor.failing) {
+    return { name: "default", url: defaultProcessorUrl };
+  }
 
-  return !health.failing;
+  if (defaultProcessor.failing) {
+    return { name: "fallback", url: fallbackProcessorUrl };
+  }
+
+  if (fallbackProcessor.failing) {
+    return { name: "default", url: defaultProcessorUrl };
+  }
+
+  if (defaultProcessor.minResponseTime < fallbackProcessor.minResponseTime) {
+    return { name: "default", url: defaultProcessorUrl };
+  }
+
+  return { name: "fallback", url: fallbackProcessorUrl };
 }

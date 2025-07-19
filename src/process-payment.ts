@@ -15,11 +15,10 @@ export async function getPaymentsSummary(
 ) {
   try {
     const keys = await redis.send("KEYS", ["payment:*"]);
-    const payments = await Promise.all(
-      keys.map((key) =>
-        redis.hmget(key, ["amount", "requestedAt", "processor"]),
-      ),
-    );
+    const payments = await Promise.all(keys.map((key: string) =>
+      redis.hmget(key, ["amount", "requestedAt", "processor"]),
+    ));
+
     const summary = {
       default: { totalRequests: 0, totalAmount: 0 },
       fallback: { totalRequests: 0, totalAmount: 0 },

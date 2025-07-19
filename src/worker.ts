@@ -1,66 +1,48 @@
 import { redis } from "bun";
-import { isCircuitOpen, recordFailure, recordSuccess } from "./circuit-breaker";
 import { getHealth } from "./health-check";
 
 const defaultProcessorUrl = Bun.env.DEFAULT_PROCESSOR_URL;
 const fallbackProcessorUrl = Bun.env.FALLBACK_PROCESSOR_URL;
 
-async function processPaymentFromQueue(payment: {
-  correlationId: string;
-  amount: number;
-}) {
+async function processPaymentFromQueue(
+  payment: {
+    correlationId: string;
+    amount: number;
+  },
+  retryCount = 0,
+) {
   try {
     const requestedAt = new Date().toISOString();
 
-    const [defaultHealthy, defaultCircuitOpen] = await Promise.all([
-      getHealth("default"),
-      isCircuitOpen("default"),
-    ]);
+    const healthyProcessor = await getHealth();
 
-    const processorToTry =
-      defaultHealthy && !defaultCircuitOpen ? "default" : "fallback";
-    const smartTimeout = Math.min(defaultHealthy.minResponseTime * 1.5, 500);
-
-    const response = await fetch(
-      `${processorToTry === "default" ? defaultProcessorUrl : fallbackProcessorUrl}/payments`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          correlationId: payment.correlationId,
-          amount: payment.amount,
-          requestedAt,
-        }),
-        signal: AbortSignal.timeout(smartTimeout),
+    const response = await fetch(`${healthyProcessor.url}/payments`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
       },
-    );
+      body: JSON.stringify({
+        correlationId: payment.correlationId,
+        amount: payment.amount,
+        requestedAt,
+      }),
+    });
 
     if (response.ok) {
-      await Promise.all([
-        recordSuccess(processorToTry),
-        redis.hmset(`payment:${payment.correlationId}`, [
-          "amount",
-          payment.amount.toString(),
-          "requestedAt",
-          requestedAt,
-          "processor",
-          processorToTry,
-        ]),
+      await redis.hmset(`payment:${payment.correlationId}`, [
+        "amount",
+        payment.amount.toString(),
+        "requestedAt",
+        requestedAt,
+        "processor",
+        healthyProcessor.name,
       ]);
+
       return;
     }
 
-    await recordFailure(processorToTry);
-
     const fallbackProcessor =
-      processorToTry === "default" ? "fallback" : "default";
-    const fallbackHealthy = await getHealth(fallbackProcessor);
-    const smartTimeoutFallback = Math.min(
-      fallbackHealthy.minResponseTime * 1.5,
-      500,
-    );
+      healthyProcessor.name === "default" ? "fallback" : "default";
 
     const fallbackResponse = await fetch(
       `${fallbackProcessor === "default" ? defaultProcessorUrl : fallbackProcessorUrl}/payments`,
@@ -74,26 +56,29 @@ async function processPaymentFromQueue(payment: {
           amount: payment.amount,
           requestedAt,
         }),
-        signal: AbortSignal.timeout(smartTimeoutFallback),
       },
     );
 
     if (fallbackResponse.ok) {
-      await Promise.all([
-        recordSuccess(fallbackProcessor),
-        redis.hmset(`payment:${payment.correlationId}`, [
-          "amount",
-          payment.amount.toString(),
-          "requestedAt",
-          requestedAt,
-          "processor",
-          fallbackProcessor,
-        ]),
+      await redis.hmset(`payment:${payment.correlationId}`, [
+        "amount",
+        payment.amount.toString(),
+        "requestedAt",
+        requestedAt,
+        "processor",
+        fallbackProcessor,
       ]);
-    } else {
-      await recordFailure(fallbackProcessor);
     }
-  } catch (_error) {}
+  } catch (error) {
+    const isTimeoutError = error.name === "TimeoutError";
+
+    if (isTimeoutError && retryCount < 3) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return processPaymentFromQueue(payment, retryCount + 1);
+    } else {
+      console.log(`${retryCount || 0} Payment processing error:`, error);
+    }
+  }
 }
 
 export async function processPaymentQueue() {
@@ -104,12 +89,12 @@ export async function processPaymentQueue() {
       if (result) {
         const payment = JSON.parse(result);
 
-        processPaymentFromQueue(payment);
+        await processPaymentFromQueue(payment);
       } else {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
     } catch (_error) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 20));
     }
   }
 }
