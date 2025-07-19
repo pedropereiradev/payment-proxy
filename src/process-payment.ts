@@ -15,9 +15,11 @@ export async function getPaymentsSummary(
 ) {
   try {
     const keys = await redis.send("KEYS", ["payment:*"]);
-    const payments = await Promise.all(keys.map((key: string) =>
-      redis.hmget(key, ["amount", "requestedAt", "processor"]),
-    ));
+    const payments = await Promise.all(
+      keys.map((key: string) =>
+        redis.hmget(key, ["amount", "requestedAt", "processor"]),
+      ),
+    );
 
     const summary = {
       default: { totalRequests: 0, totalAmount: 0 },
@@ -35,10 +37,20 @@ export async function getPaymentsSummary(
     for (const [amount, _requestedAt, processor] of filteredPayments) {
       if (processor === "default" || processor === "fallback") {
         summary[processor].totalRequests += 1;
-        summary[processor].totalAmount += parseFloat(amount);
+        summary[processor].totalAmount += Number(amount);
       }
     }
-    return summary;
+
+    return {
+      default: {
+        totalRequests: summary.default.totalRequests,
+        totalAmount: Number(summary.default.totalAmount.toFixed(2)),
+      },
+      fallback: {
+        totalRequests: summary.fallback.totalRequests,
+        totalAmount: Number(summary.fallback.totalAmount.toFixed(2)),
+      },
+    };
   } catch (_error) {
     throw new Error("Failed to get payment summary");
   }
