@@ -4,6 +4,8 @@ const defaultProcessorUrl = Bun.env.DEFAULT_PROCESSOR_URL as string;
 const fallbackProcessorUrl = Bun.env.FALLBACK_PROCESSOR_URL as string;
 
 const EXPIRE_TIME = 5;
+const INSTANCE_ID = Bun.env.INSTANCE_ID || "api1";
+const HEALTH_CHECK_INSTANCE = "api1";
 
 interface HealthCheckResponse {
   failing: boolean;
@@ -63,11 +65,19 @@ export async function getHealth(): Promise<{ name: string; url: string }> {
     return chooseProcessor(cachedData);
   }
 
-  const health = await fetchHealthFromProcessors();
+  if (INSTANCE_ID === HEALTH_CHECK_INSTANCE) {
+    const health = await fetchHealthFromProcessors();
+    await cacheHealthCheck(health);
+    return chooseProcessor(health);
+  }
 
-  await cacheHealthCheck(health);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const retryCache = await getCachedHealth();
+  if (retryCache) {
+    return chooseProcessor(retryCache);
+  }
 
-  return chooseProcessor(health);
+  return { name: "default", url: defaultProcessorUrl };
 }
 
 async function chooseProcessor({
@@ -86,7 +96,10 @@ async function chooseProcessor({
     return { name: "default", url: defaultProcessorUrl };
   }
 
-  if (defaultProcessor.minResponseTime < fallbackProcessor.minResponseTime) {
+  if (
+    defaultProcessor.minResponseTime <=
+    fallbackProcessor.minResponseTime * 1.5
+  ) {
     return { name: "default", url: defaultProcessorUrl };
   }
 

@@ -22,7 +22,7 @@ Bun.serve({
           });
         }
 
-        await processPayment(payment);
+        processPayment(payment);
 
         return new Response(null, { status: 201 });
       },

@@ -1,6 +1,20 @@
 import { redis } from "bun";
 import { getHealth } from "./health-check";
 
+let cachedProcessor: { name: string; url: string } | null = null;
+let processorCacheExpiry = 0;
+
+async function getCachedProcessor() {
+  const now = Date.now();
+  if (cachedProcessor && now < processorCacheExpiry) {
+    return cachedProcessor;
+  }
+  
+  cachedProcessor = await getHealth();
+  processorCacheExpiry = now + 2000;
+  return cachedProcessor;
+}
+
 const defaultProcessorUrl = Bun.env.DEFAULT_PROCESSOR_URL;
 const fallbackProcessorUrl = Bun.env.FALLBACK_PROCESSOR_URL;
 
@@ -14,7 +28,7 @@ async function processPaymentFromQueue(
   try {
     const requestedAt = new Date().toISOString();
 
-    const healthyProcessor = await getHealth();
+    const healthyProcessor = await getCachedProcessor();
 
     const response = await fetch(`${healthyProcessor.url}/payments`, {
       method: "POST",
@@ -81,20 +95,34 @@ async function processPaymentFromQueue(
   }
 }
 
+async function processBatch() {
+  try {
+    const [result1, result2, result3, result4] = await Promise.all([
+      redis.lpop("payment_queue"),
+      redis.lpop("payment_queue"),
+      redis.lpop("payment_queue"),
+      redis.lpop("payment_queue")
+    ]);
+    
+    const payments = [result1, result2, result3, result4].filter(Boolean).map(result => JSON.parse(result));
+    
+    if (payments.length > 0) {
+      await Promise.all(payments.map(payment => processPaymentFromQueue(payment)));
+      return payments.length;
+    }
+    
+    return 0;
+  } catch (_error) {
+    return 0;
+  }
+}
+
 export async function processPaymentQueue() {
   while (true) {
-    try {
-      const result = await redis.lpop("payment_queue");
-
-      if (result) {
-        const payment = JSON.parse(result);
-
-        await processPaymentFromQueue(payment);
-      } else {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-    } catch (_error) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
+    const processed = await processBatch();
+    
+    if (processed === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
     }
   }
 }
