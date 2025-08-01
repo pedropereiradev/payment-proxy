@@ -17,9 +17,7 @@ Bun.serve({
         };
 
         if (!payment.correlationId || !payment.amount) {
-          return new Response("Missing correlationId or amount", {
-            status: 400,
-          });
+          return new Response(null, { status: 400 });
         }
 
         processPayment(payment);

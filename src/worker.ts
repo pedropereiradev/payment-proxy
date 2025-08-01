@@ -97,14 +97,15 @@ async function processPaymentFromQueue(
 
 async function processBatch() {
   try {
-    const [result1, result2, result3, result4] = await Promise.all([
+    const [result1, result2, result3, result4, result5] = await Promise.all([
       redis.lpop("payment_queue"),
+      redis.lpop("payment_queue"),  
       redis.lpop("payment_queue"),
       redis.lpop("payment_queue"),
       redis.lpop("payment_queue")
     ]);
     
-    const payments = [result1, result2, result3, result4].filter(Boolean).map(result => JSON.parse(result));
+    const payments = [result1, result2, result3, result4, result5].filter(Boolean).map(result => JSON.parse(result));
     
     if (payments.length > 0) {
       await Promise.all(payments.map(payment => processPaymentFromQueue(payment)));

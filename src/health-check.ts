@@ -98,7 +98,7 @@ async function chooseProcessor({
 
   if (
     defaultProcessor.minResponseTime <=
-    fallbackProcessor.minResponseTime * 1.5
+    fallbackProcessor.minResponseTime * 2.0
   ) {
     return { name: "default", url: defaultProcessorUrl };
   }
