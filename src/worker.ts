@@ -9,7 +9,7 @@ async function getCachedProcessor() {
   if (cachedProcessor && now < processorCacheExpiry) {
     return cachedProcessor;
   }
-  
+
   cachedProcessor = await getHealth();
   processorCacheExpiry = now + 2000;
   return cachedProcessor;
@@ -22,8 +22,10 @@ async function processPaymentFromQueue(
   payment: {
     correlationId: string;
     amount: number;
+    retryAttempts?: number;
   },
   retryCount = 0,
+  isRetry = false,
 ) {
   try {
     const requestedAt = new Date().toISOString();
@@ -52,7 +54,7 @@ async function processPaymentFromQueue(
         healthyProcessor.name,
       ]);
 
-      return;
+      return true;
     }
 
     const fallbackProcessor =
@@ -82,36 +84,72 @@ async function processPaymentFromQueue(
         "processor",
         fallbackProcessor,
       ]);
+      return true;
     }
+
+    if (!isRetry) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return processPaymentFromQueue(payment, 0, true);
+    }
+
+    return false;
   } catch (error) {
     const isTimeoutError = error.name === "TimeoutError";
 
     if (isTimeoutError && retryCount < 3) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      return processPaymentFromQueue(payment, retryCount + 1);
-    } else {
-      console.log(`${retryCount || 0} Payment processing error:`, error);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return processPaymentFromQueue(payment, retryCount + 1, isRetry);
     }
+
+    if (!isRetry) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return processPaymentFromQueue(payment, 0, true);
+    }
+
+    return false;
   }
 }
 
 async function processBatch() {
   try {
-    const [result1, result2, result3, result4, result5] = await Promise.all([
-      redis.lpop("payment_queue"),
-      redis.lpop("payment_queue"),  
+    const results = await Promise.all([
       redis.lpop("payment_queue"),
       redis.lpop("payment_queue"),
-      redis.lpop("payment_queue")
+      redis.lpop("payment_queue"),
+      redis.lpop("payment_queue"),
+      redis.lpop("payment_queue"),
     ]);
-    
-    const payments = [result1, result2, result3, result4, result5].filter(Boolean).map(result => JSON.parse(result));
-    
+
+    const payments = results
+      .filter(Boolean)
+      .map((result) => JSON.parse(result as string));
+
     if (payments.length > 0) {
-      await Promise.all(payments.map(payment => processPaymentFromQueue(payment)));
+      const processResults = await Promise.all(
+        payments.map((payment) => processPaymentFromQueue(payment)),
+      );
+
+      const failedPayments = payments.filter((payment, index) => {
+        const failed = !processResults[index];
+        const retryAttempts = payment.retryAttempts || 0;
+        return failed && retryAttempts < 5;
+      });
+
+      if (failedPayments.length > 0) {
+        await Promise.all(
+          failedPayments.map((payment) => {
+            const updatedPayment = {
+              ...payment,
+              retryAttempts: (payment.retryAttempts || 0) + 1,
+            };
+            return redis.rpush("payment_queue", JSON.stringify(updatedPayment));
+          }),
+        );
+      }
+
       return payments.length;
     }
-    
+
     return 0;
   } catch (_error) {
     return 0;
@@ -121,7 +159,6 @@ async function processBatch() {
 export async function processPaymentQueue() {
   while (true) {
     const processed = await processBatch();
-    
     if (processed === 0) {
       await new Promise((resolve) => setTimeout(resolve, 1));
     }
